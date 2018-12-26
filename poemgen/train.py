@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+import time
 import argparse
 import json
 import os
@@ -23,7 +24,7 @@ class PoemGenerater(nn.Module):
         self.num_sents = config.num_sents
         self.num_chars = config.num_chars
 
-        self.device = config.device
+        self.device = torch.device(config.device)
 
         self.decoder_input_dim = self.emb_dim + self.pos_dim + self.hidden_dim
 
@@ -34,7 +35,7 @@ class PoemGenerater(nn.Module):
         self.dropout = nn.Dropout(self.dropout_rate)
         self.sent_decoder = nn.LSTM(self.hidden_dim * 2, self.hidden_dim, dropout=self.dropout_rate, num_layers=self.num_layers)
         self.char_decoder = nn.LSTM(self.decoder_input_dim, self.hidden_dim, dropout=self.dropout_rate, num_layers=self.num_layers)
-        self.hidden2char = nn.Linear(self.hidden_dim, self.vocab_size)
+        self.hidden2char = nn.Linear(self.hidden_dim * 2, self.vocab_size)
         self.softmax = nn.LogSoftmax(dim=-1)
 
         self.attention_layer = nn.Linear(self.hidden_dim * 3, 1)
@@ -42,61 +43,109 @@ class PoemGenerater(nn.Module):
     def _dot_attention(self, enc_h, h):
         """
         enc_h: shape (max_lenth, batch_size, hidden_dim*2)
-        h: shape (num_layers, batch_size, hidden_dim)
+        h: shape (batch_size, hidden_dim)
         """
         enc_h = (enc_h[:, :, self.hidden_dim:] + enc_h[:, :, :self.hidden_dim]) / 2
-        weights = torch.transpose(enc_h, 0, 1).bmm(h[-1].unsqueeze(-1))
+        weights = torch.transpose(enc_h, 0, 1).bmm(h.unsqueeze(-1))
         weights = torch.transpose(weights, 0, 1)  # shape (max_length, batch_size)
         weights = F.softmax(weights, 0)
-        atten = torch.sum(enc_h * weights, 0)  # shape (batch_size, hidden_dim*2)
+        atten = torch.sum(enc_h * weights, 0)  # shape (batch_size, hidden_dim)
         return atten
 
-    def _concat_attention(self, enc_h, h):
-        """
-        enc_h: shape (max_lenth, batch_size, hidden_dim*2)
-        h: shape (num_layers, batch_size, hidden_dim)
-        """
-        h = h[-1].expand(list(enc_h.size()[:2]) + [self.hidden_dim])
-        concated = torch.cat((enc_h, h), -1).view(-1, self.hidden_dim * 3)
-        weights = self.attention_layer(concated).view(enc_h.size()[:2])
-        weights = F.softmax(weights, 0)
-        atten = torch.sum(enc_h * weights.unsqueeze(-1).expand(enc_h.size()), 0)
-        return atten
+    # def _concat_attention(self, enc_h, h):
+    #     """
+    #     enc_h: shape (max_lenth, batch_size, hidden_dim*2)
+    #     h: shape (num_layers, batch_size, hidden_dim)
+    #     """
+    #     h = h[-1].expand(list(enc_h.size()[:2]) + [self.hidden_dim])
+    #     concated = torch.cat((enc_h, h), -1).view(-1, self.hidden_dim * 3)
+    #     weights = self.attention_layer(concated).view(enc_h.size()[:2])
+    #     weights = F.softmax(weights, 0)
+    #     atten = torch.sum(enc_h * weights.unsqueeze(-1).expand(enc_h.size()), 0)
+    #     return atten
 
-    def forward(self, sentences):
+    def _encode(self, sentences):
+        char_embs = self.char_emb(sentences)
+        output, hidden = self.encoder_lstm(char_embs)
+        hidden = [h.view(self.num_layers, 2, -1, self.hidden_dim).mean(1) for h in hidden]
+        context = hidden[0][-1]
+        return output, hidden, context
+
+    def _decode_sent(self, hidden, context, prev_sent):
+        inputs = torch.cat((context, prev_sent), 1).unsqueeze(0)  # 3D
+        context, hidden = self.sent_decoder(inputs, hidden)
+        context = context.squeeze(0)  # (bs, hdim)
+        return hidden, context
+
+    def _decode_char(self, enc_h, hidden, context, prev_char, pos):
+        bs = prev_char.size()[0]
+        pos = torch.tensor(pos).unsqueeze(0).expand(bs).to(self.device)
+        pos_embs = self.pos_emb(pos)
+        char_embs = self.dropout(self.char_emb(prev_char))
+        inputs = torch.cat((char_embs, pos_embs, context), 1).unsqueeze(0)  # 3D
+        context, hidden = self.char_decoder(inputs, hidden)
+        context = context.squeeze(0)
+
+        atten = self._dot_attention(enc_h, context)
+        inputs = torch.cat((context, atten), 1)
+        output = self.hidden2char(inputs)
+        return hidden, context, output
+
+    def forward(self, sentences, targets=None):
         """
         sentences: 2D tensor of shape (max_length, batch_size)
+        targets: 2D tensor of shape (target_length, batch_size)
+            if None: no teacher forcing
+            otherwise: use teacher forcing
         """
-        bs = sentences.size()[1]
-        embed = self.char_emb(sentences)  # shape (max_length, batch_size, emb_dim)
-        enc_hidden, (h_n, c_n) = self.encoder_lstm(embed)  # output of shape (max_length, batch_size, hidden_dim*2)
-        h_n = h_n.view(self.num_layers, 2, -1, self.hidden_dim).mean(1)
-        c_n = c_n.view(self.num_layers, 2, -1, self.hidden_dim).mean(1)
-        hidden = (h_n, c_n)  # h_n of shape (num_layers, batch_size, hidden_dim*2)
-        enc_final_h = h_n[-1]  # shape (batch_size, hiddem_dim)
+        bs = sentences.size()[1]  # batch_size
+        enc_out, hidden, context = self._encode(sentences)
 
+        prev_sent = context
+        prev_char = sentences[-1]
         outputs = []
-        prev_sent_h = enc_final_h
         for ts in range(self.num_sents):
-            atten = self._concat_attention(enc_hidden, hidden[0])
-            ts_in = torch.cat((enc_final_h, prev_sent_h), 1)
-            ts_out, hidden = self.sent_decoder(atten.unsqueeze(0), hidden)
-
-            h = hidden
-            prev_chars = torch.tensor([SOS_TOKEN] * bs).to(self.device)
+            hidden, char_context = self._decode_sent(hidden, context, prev_sent)
+            char_hidden = hidden
             for tc in range(self.num_chars):
-                char_embs = self.dropout(self.char_emb(prev_chars))  # (bs, char_dim)
-                t = torch.tensor(ts * self.num_chars + tc).to(self.device)
-                pos_embs = self.pos_emb(t).unsqueeze(0).expand(bs, self.pos_dim)  # (bs, pos_dim)
-                atten = self._dot_attention(enc_hidden, h[0])  # (bs, hidden_dim)
-                tc_input = torch.cat((char_embs, pos_embs, atten), -1).unsqueeze(0)
-                tc_out, h = self.char_decoder(tc_input, h)
-                tc_out = self.hidden2char(tc_out.view(bs, -1))
-                outputs.append(tc_out)
+                pos = ts * self.num_chars + tc
+                if pos >= 1 and targets is not None:  # use teacher forcing
+                    prev_char = targets[pos - 1]
+
+                char_hidden, prev_sent, output = self._decode_char(enc_out, char_hidden, char_context, prev_char, pos)
+                _, prev_char = output.max(-1)
+                prev_char = prev_char.detach()
+                outputs.append(output)
 
         outputs = torch.stack(outputs, 0)
         outputs = self.softmax(outputs)
         return outputs
+
+        # embed = self.char_emb(sentences)  # shape (max_length, batch_size, emb_dim)
+        # enc_hidden, (h_n, c_n) = self.encoder_lstm(embed)  # output of shape (max_length, batch_size, hidden_dim*2)
+        # h_n = h_n.view(self.num_layers, 2, -1, self.hidden_dim).mean(1)
+        # c_n = c_n.view(self.num_layers, 2, -1, self.hidden_dim).mean(1)
+        # hidden = (h_n, c_n)  # h_n of shape (num_layers, batch_size, hidden_dim*2)
+        # enc_final_h = h_n[-1]  # shape (batch_size, hiddem_dim)
+
+        # outputs = []
+        # prev_sent_h = enc_final_h
+        # for ts in range(self.num_sents):
+        #     atten = self._concat_attention(enc_hidden, hidden[0])
+        #     ts_in = torch.cat((enc_final_h, prev_sent_h), 1)
+        #     ts_out, hidden = self.sent_decoder(atten.unsqueeze(0), hidden)
+
+        #     h = hidden
+        #     prev_chars = torch.tensor([SOS_TOKEN] * bs).to(self.device)
+        #     for tc in range(self.num_chars):
+        #         char_embs = self.dropout(self.char_emb(prev_chars))  # (bs, char_dim)
+        #         t = torch.tensor(ts * self.num_chars + tc).to(self.device)
+        #         pos_embs = self.pos_emb(t).unsqueeze(0).expand(bs, self.pos_dim)  # (bs, pos_dim)
+        #         atten = self._dot_attention(enc_hidden, h[0])  # (bs, hidden_dim)
+        #         tc_input = torch.cat((char_embs, pos_embs, atten), -1).unsqueeze(0)
+        #         tc_out, h = self.char_decoder(tc_input, h)
+        #         tc_out = self.hidden2char(tc_out.view(bs, -1))
+        #         outputs.append(tc_out)
 
         # for t in range(self.target_length):
         #     char_embs = self.dropout(self.char_emb(prev_chars))
@@ -108,6 +157,18 @@ class PoemGenerater(nn.Module):
         #     _, prev_chars = t_output.max(-1)
         #     prev_chars = prev_chars.detach()
         #     outputs.append(t_output)
+
+
+def export_checkpoint(epoch, model, optimizer, loss, best_dev_bleu, char2idx, savepath):
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'loss': loss,
+        'best_dev_bleu': best_dev_bleu,
+        'char2idx': char2idx,
+    }
+    torch.save(checkpoint, savepath)
 
 
 def main():
@@ -125,6 +186,7 @@ def main():
     parser.add_argument('--num_layers', type=int, default=3, help='number of stacked LSTM layers')
     parser.add_argument('--dropout', type=float, default=0.5, help='dropout rate')
     parser.add_argument('-bi', '--bidirectional', type=bool, default=True, help='use bidirectional lstm')
+    parser.add_argument('--regularization', type=float, default=1e-5, help='l2 regularization strength')
 
     parser.add_argument('--num_epochs', type=int, default=5000, help='number of epochs to run')
     parser.add_argument('-bs', '--batch_size', type=int, default=1000, help='batch size')
@@ -133,21 +195,15 @@ def main():
     parser.add_argument('--lr_min', type=float, default=0.01, help='minimum learning rate')
     parser.add_argument('-opt', '--optimizer', default='Adam', choices=['SGD', 'Adam'], help='optimizer')
     parser.add_argument('--clip', type=float, default=5.0, help='gradient clipping by norm')
+    parser.add_argument('--teacher_forcing', type=bool, default=True, help='use teacher forcing during training')
 
-    parser.add_argument('--val_metric', default='bleu-2', choices=['bleu-2', 'bleu-3', 'bleu-4'], help='validation metric')
+    parser.add_argument('--val_metric', default='bleu-2', choices=['bleu-1', 'bleu-2', 'bleu-3', 'bleu-4', '2-bleu-2'], help='validation metric')
     parser.add_argument('--val_step', type=int, default=1000, help='perform validation every n iterations')
 
     args = parser.parse_args()
 
-    print('Configuration:')
-    print('\n'.join('\t{:15} {}'.format(k + ':', str(v)) for k, v in sorted(dict(vars(args)).items())))
-    export_config(args, os.path.join(args.export, 'config.json'))
-
     # set random seed
     torch.manual_seed(args.seed)
-
-    print()
-    print('Training:')
 
     # load train/dev/test data
     train_x, train_y, char2idx = load_train(args.train)
@@ -156,21 +212,31 @@ def main():
     args.vocab_size = len(char2idx)
     args.num_chars = train_x.shape[-1]
     args.num_sents = train_y.shape[-1] // args.num_chars
+    args.device = "cuda:0" if torch.cuda.is_available() and not args.cpu else "cpu"
 
-    # training
-    device = torch.device("cuda:0" if torch.cuda.is_available() and not args.cpu else "cpu")
-    args.device = device
+    device = torch.device(args.device)
+
+    print('Configuration:')
+    print('\n'.join('\t{:20} {}'.format(k + ':', str(v)) for k, v in sorted(dict(vars(args)).items())))
+    export_config(args, os.path.join(args.export, 'config.json'))
     model = PoemGenerater(args).to(device)
 
     if args.optimizer == 'SGD':
-        optimizer = optim.SGD(model.parameters(), lr=args.learning_rate)
+        optimizer = optim.SGD(model.parameters(),
+                              lr=args.learning_rate, weight_decay=args.regularization)
     elif args.optimizer == 'Adam':
-        optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
+        optimizer = optim.Adam(model.parameters(),
+                               lr=args.learning_rate, weight_decay=args.regularization)
 
     criterion = nn.NLLLoss()
 
+    # training
+
+    print()
+    print('Training:')
     print('\tstart training on device {}'.format(device))
     model.train()
+    t0 = time.time()
     lr = args.learning_rate
     best_dev_bleu = -1.
     niter = 0
@@ -181,7 +247,10 @@ def main():
             j = min(i + args.batch_size, train_x.shape[0])
             xs = torch.tensor(train_x[i:j].T).to(device)
             ys = torch.tensor(train_y[i:j].T).to(device)
-            scores = model(xs)
+            if args.teacher_forcing:
+                scores = model(xs, ys)
+            else:
+                scores = model(xs)
             loss = criterion(scores.view(-1, args.vocab_size), ys.view(-1))
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), args.clip)
@@ -200,22 +269,19 @@ def main():
                 train_bleu = eval_bleu(train_y[:1000], train_pred, args.val_metric)
 
                 print('    [Val] train_bleu: {:.4f}   val_bleu: {:.4f}'.format(train_bleu, dev_bleu))
+                export_checkpoint(epoch, model, optimizer, loss, best_dev_bleu, char2idx, os.path.join(args.export, 'final_state.ckpt'))
                 if dev_bleu >= best_dev_bleu:
                     best_dev_bleu = dev_bleu
-                    checkpoint = {
-                        'epoch': epoch,
-                        'model_state_dict': model.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(),
-                        'loss': loss,
-                        'best_dev_bleu': best_dev_bleu,
-                    }
-                    torch.save(checkpoint, os.path.join(args.export, 'model.ckpt'))
+                    export_checkpoint(epoch, model, optimizer, loss, best_dev_bleu, char2idx, os.path.join(args.export, 'model.ckpt'))
                 else:
                     # adjust lerning rate if dev_f decreases
                     if args.optimizer == 'SGD':
                         lr = min(args.lr_min, lr * args.lr_decay)
                         for param_group in optimizer.param_groups:
                             param_group['lr'] = lr
+    print()
+    print('\ttraining finished in {:d} seconds'.format(int(time.time() - t0)))
+    export_checkpoint(epoch, model, optimizer, loss, best_dev_bleu, char2idx, os.path.join(args.export, 'final_state.ckpt'))
 
     # evaluation
     print()
@@ -225,17 +291,17 @@ def main():
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
 
-    print('\tgenerating poems')
-    with torch.no_grad():
-        test_pred = model(torch.tensor(test_x.T).to(device))
-        test_pred = test_pred.cpu().numpy().argmax(-1).T
-    idx2char = {i: c for c, i in char2idx.items()}
-    test_sents = [[idx2char[i] for i in row] for row in test_pred]
-    test_sents = [' '.join(row[:7] + ['.'] + row[7:14] + [','] + row[14:] + ['.']) for row in test_sents]
     if args.export != '':
+        print('\tgenerating poems')
+        with torch.no_grad():
+            test_pred = model(torch.tensor(test_x.T).to(device))
+            test_pred = test_pred.cpu().numpy().argmax(-1).T
+        idx2char = {i: c for c, i in char2idx.items()}
+        test_sents = [[idx2char[i] for i in row] for row in test_pred]
+        test_sents = [' '.join(row[:7] + ['.'] + row[7:14] + [','] + row[14:] + ['.']) for row in test_sents]
         export(test_sents, os.path.join(args.export, 'generated_poem.txt'))
         print('\texperiment exported to directory {}'.format(args.export))
-    print()
+        print()
 
 if __name__ == '__main__':
     main()
