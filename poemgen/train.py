@@ -10,6 +10,9 @@ import logging
 import pickle
 from utils import *
 
+NUM_SENTS = 3
+VAL_TYPES = ['avg', '1', '2', '3']
+
 
 class PoemGenerater(nn.Module):
 
@@ -177,6 +180,31 @@ def export_checkpoint(epoch, model, optimizer, loss, best_dev_bleu, vocab, savep
     torch.save(checkpoint, savepath)
 
 
+def evaluate(y, pred, metrics):
+    """
+    y: ndarray of shape (batch_size, max_length)
+    pred: ndarray of shape (batch_size, max_length)
+    metrics: list
+
+    returns: list
+    """
+    res = np.zeros((4, len(metrics)), dtype=np.float64)
+    res[1] = [eval_bleu(y[:, :7], pred[:, :7], m) for m in metrics]
+    res[2] = [eval_bleu(y[:, 7:14], pred[:, 7:14], m) for m in metrics]
+    res[3] = [eval_bleu(y[:, 14:21], pred[:, 14:21], m) for m in metrics]
+    res[0] = res[1:].mean(0)
+    return res.reshape(-1).tolist()
+
+
+def bool_flag(v):
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--train', default='./data/train.txt', help='training data')
@@ -193,23 +221,23 @@ def main():
     parser.add_argument('--hidden_dim', type=int, default=100, help='number of hidden units')
     parser.add_argument('--num_layers', type=int, default=3, help='number of stacked LSTM layers')
     parser.add_argument('--dropout', type=float, default=0.5, help='dropout rate')
-    parser.add_argument('-bi', '--bidirectional', type=bool, default=True, help='use bidirectional lstm')
+    parser.add_argument('-bi', '--bidirectional', type=bool_flag, nargs='?', const=True, default=True, help='use bidirectional lstm')
     parser.add_argument('--regularization', type=float, default=1e-5, help='l2 regularization strength')
     parser.add_argument('--attention', choices=['dot', 'general', 'concat'], default='general', help='attention machanism')
-    parser.add_argument('--label_smoothing', type=float, default=0., help='label smoothing (zero to disable)')
+    parser.add_argument('--label_smoothing', type=float, default=0.2, help='label smoothing (zero to disable)')
     parser.add_argument('--rnn_cell', choices=['GRU', 'LSTM'], default='GRU', help='type of rnn cell')
 
-    parser.add_argument('--num_epochs', type=int, default=5000, help='number of epochs to run')
+    parser.add_argument('--num_epochs', type=int, default=10000, help='number of epochs to run')
     parser.add_argument('-bs', '--batch_size', type=int, default=1000, help='batch size')
     parser.add_argument('-lr', '--learning_rate', type=float, default=0.001, help='learning rate')
     parser.add_argument('--lr_decay', type=float, default=0.5, help='learning rate decay factor')
     parser.add_argument('--lr_min', type=float, default=0.01, help='minimum learning rate')
     parser.add_argument('-opt', '--optimizer', default='Adam', choices=['SGD', 'Adam'], help='optimizer')
     parser.add_argument('--clip', type=float, default=5.0, help='gradient clipping by norm')
-    parser.add_argument('--teacher_forcing', type=bool, default=True, help='use teacher forcing during training')
+    parser.add_argument('--teacher_forcing', type=bool_flag, nargs='?', const=True, default=True, help='use teacher forcing during training')
 
-    parser.add_argument('--val_metric', default=['bleu-1', 'bleu-2', 'bleu-3', 'bleu-4'], nargs='+', choices=['bleu-1', 'bleu-2', 'bleu-3', 'bleu-4', '2-bleu-2'], help='validation metric')
-    parser.add_argument('--val_step', type=int, default=1000, help='perform validation every n iterations')
+    parser.add_argument('--val_metric', default=['bleu-1', 'bleu-2', 'bleu-3', 'bleu-4'], nargs='+', choices=['bleu-1', 'bleu-2', 'bleu-3', 'bleu-4'], help='validation metric')
+    parser.add_argument('--val_step', type=int, default=80, help='perform validation every n iterations')
 
     args = parser.parse_args()
 
@@ -264,8 +292,13 @@ def main():
     #  training                                            #
     #------------------------------------------------------#
     num_val = len(args.val_metric)
+    header = ['iteration', 'loss']
+    for s in ('val', 'train'):
+        for t in VAL_TYPES:
+            for metric in args.val_metric:
+                header.append('_'.join([s, t, metric]))
     with open(os.path.join(args.export, 'log.csv'), 'w') as fout:
-        fout.write('iteration,loss,' + ','.join(args.val_metric * 2) + '\n')
+        fout.write(','.join(header) + '\n')
 
     print()
     print('Training:')
@@ -307,7 +340,7 @@ def main():
             #------------------------------------------------------#
             #  validation                                          #
             #------------------------------------------------------#
-            if niter % args.val_step == 0 or j == train_x.shape[0]:
+            if niter % args.val_step == 0:
                 model.eval()
                 with torch.no_grad():
                     dev_pred = model(torch.tensor(dev_x.T).to(device))
@@ -315,16 +348,18 @@ def main():
                     train_pred = model(torch.tensor(train_x[:1000].T).to(device))
                     train_pred = train_pred.cpu().numpy().argmax(-1).T
                 model.train()
-                dev_bleu = [eval_bleu(dev_y, dev_pred, metric) for metric in args.val_metric]
-                train_bleu = [eval_bleu(train_y[:1000], train_pred, metric) for metric in args.val_metric]
+                # dev_bleu = [eval_bleu(dev_y, dev_pred, metric) for metric in args.val_metric]
+                # train_bleu = [eval_bleu(train_y[:1000], train_pred, metric) for metric in args.val_metric]
+                dev_bleu = evaluate(dev_y, dev_pred, args.val_metric)
+                train_bleu = evaluate(train_y[:1000], train_pred, args.val_metric)
 
-                if niter % args.val_step == 0:
-                    with open(os.path.join(args.export, 'log.csv'), 'a') as fout:
-                        fout.write(('{:d},{:f}' + ',{:f}' * num_val * 2 + '\n').format(niter, loss, *dev_bleu, *train_bleu))
+                with open(os.path.join(args.export, 'log.csv'), 'a') as fout:
+                    fout.write(('{:d},{:f}' + ',{:f}' * num_val * len(VAL_TYPES) * 2 + '\n').format(niter, loss, *dev_bleu, *train_bleu))
+                    # fout.flush()
 
                 print()
-                print(('\t[Train] ' + ' {}: {:.4f} ' * num_val).format(*[t for l in zip(args.val_metric, train_bleu) for t in l]))
-                print(('\t[Val]   ' + ' {}: {:.4f} ' * num_val).format(*[t for l in zip(args.val_metric, dev_bleu) for t in l]))
+                print(('\t[Train] ' + ' {}: {:.4f} ' * num_val).format(*[t for l in zip(args.val_metric, train_bleu[:num_val]) for t in l]))
+                print(('\t[Val]   ' + ' {}: {:.4f} ' * num_val).format(*[t for l in zip(args.val_metric, dev_bleu[:num_val]) for t in l]))
 
                 export_checkpoint(epoch, model, optimizer, loss, best_dev_bleu, vocab, os.path.join(args.export, 'final_state.ckpt'))
                 if dev_bleu[0] >= best_dev_bleu:
