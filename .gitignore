@@ -1,3 +1,7 @@
+# Project specific
+*/export/
+*/log/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
