@@ -11,12 +11,12 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 import matplotlib.font_manager as mpm
 import numpy as np
-mpl.use('Agg')
-font_path = "songti.ttf"
-prop = mpm.FontProperties(fname=font_path, size=14)
-# plt.rcParams['font.sans-serif']=['SimHei']
-# plt.rcParams['axes.unicode_minus']=False
 from utils import *
+
+mpl.use('Agg')
+
+FONT_PATH = "/home/fengyanlin/songti.ttf"
+prop = mpm.FontProperties(fname=FONT_PATH, size=14)
 
 
 def heatmap(data, row_labels, col_labels, ax=None,
@@ -135,29 +135,16 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--c', default='export/model.ckpt', help='checkpoint file')
     parser.add_argument('-id', '--indices', type=int, nargs='+', default=[np.random.randint(500) for _ in range(4)], help='test sentences\' id to plot')
-    # parser.add_argument('--model', choices=['lstm', 'train'], default='train', help='model')
     parser.add_argument('--test', default='data/test.txt', help='test set')
     parser.add_argument('--savepath', default='export/generated_poem.txt', help='export file')
     parser.add_argument('--output', default='export/attention_map.pdf', help='output file')
     parser.add_argument('--grid', action='store_true')
     args = parser.parse_args()
 
-    # model_path = args.checkpoint
-    # config_path = os.path.join(os.path.dirname(args.checkpoint), 'config.json')
-
-    # with open(config_path, 'r') as fin:
-    #     config = AttrDict(json.load(fin))
-
     ckpt_dic = torch.load(args.c)
-    # device = torch.device(config.device)
     vocab = ckpt_dic['vocab']
     test_x = load_test(args.test, vocab)
 
-    # if args.model == 'train':
-    #     model = PoemGenerater(config).to(device)
-    # else:
-    #     model = BiLSTMGenerator(config).to(device)
-    # model.load_state_dict(ckpt_dic['model_state_dict'])
     model = ckpt_dic['model_state_dict']
     if next(model.parameters()).is_cuda:
         device = torch.device('cuda:0')
@@ -171,8 +158,6 @@ def main():
 
     test_x = [[vocab[i] for i in row] for row in test_x]
     test_y = [[vocab[i] for i in row] for row in test_pred]
-    # test_x = [[i for i in row] for row in test_x]
-    # test_y = [[i for i in row] for row in test_pred]
 
     if args.grid:
         n = 10
@@ -182,7 +167,6 @@ def main():
             ax = fig.add_subplot(5, 2, i + 1)
             heatmap(weights[idx], test_x[idx], test_y[idx], ax, cmap='Blues', cbarlabel="Attention Weight")
 
-        # fig.set_size_inches(20, 8)
         fig.set_size_inches(12, 16)
         fig.savefig(args.output, format='pdf', bbox_inches='tight')
 
@@ -195,8 +179,7 @@ def main():
             ax = fig.add_subplot('{}1{}'.format(n, i + 1))
             heatmap(weights[idx], test_x[idx], test_y[idx], ax, cmap='Blues', cbarlabel="Attention Weight")
 
-        # fig.set_size_inches(20, 8)
-        fig.set_size_inches(6, 12)
+        fig.set_size_inches(6, 3 * n)
         fig.savefig(args.output, format='pdf', bbox_inches='tight')
 
 
