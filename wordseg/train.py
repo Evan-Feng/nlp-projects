@@ -12,6 +12,81 @@ import logging
 from utils import *
 
 
+class ScaledDotProductAttention(nn.Module):
+
+    def __init__(self, temperature, attn_dropout=0.1):
+        super().__init__()
+        self.temperature = temperature
+        self.dropout = nn.Dropout(attn_dropout)
+        self.softmax = nn.Softmax(dim=2)
+
+    def forward(self, q, k, v, mask=None):
+
+        attn = torch.bmm(q, k.transpose(1, 2))
+        attn = attn / self.temperature
+
+        if mask is not None:
+            attn = attn.masked_fill(mask, -np.inf)
+        attn = self.softmax(attn)
+        attn = self.dropout(attn)
+        output = torch.bmm(attn, v)
+        return output, attn
+
+
+class MultiHeadAttention(nn.Module):
+
+    def __init__(self, n_head, d_model, d_k, d_v, dropout=0.1):
+        super().__init__()
+
+        self.n_head = n_head
+        self.d_k = d_k
+        self.d_v = d_v
+
+        self.w_qs = nn.Linear(d_model, n_head * d_k)
+        self.w_ks = nn.Linear(d_model, n_head * d_k)
+        self.w_vs = nn.Linear(d_model, n_head * d_v)
+        nn.init.normal_(self.w_qs.weight, mean=0, std=np.sqrt(2.0 / (d_model + d_k)))
+        nn.init.normal_(self.w_ks.weight, mean=0, std=np.sqrt(2.0 / (d_model + d_k)))
+        nn.init.normal_(self.w_vs.weight, mean=0, std=np.sqrt(2.0 / (d_model + d_v)))
+
+        self.attention = ScaledDotProductAttention(temperature=np.power(d_k, 0.5))
+        self.layer_norm = nn.LayerNorm(d_model)
+
+        # self.fc = nn.Linear(n_head * d_v, d_model)
+        # nn.init.xavier_normal_(self.fc.weight)
+
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, q, k, v, mask=None):
+
+        d_k, d_v, n_head = self.d_k, self.d_v, self.n_head
+
+        sz_b, len_q, _ = q.size()
+        sz_b, len_k, _ = k.size()
+        sz_b, len_v, _ = v.size()
+
+        residual = q
+
+        q = self.w_qs(q).view(sz_b, len_q, n_head, d_k)  # b x lq x n x dk
+        k = self.w_ks(k).view(sz_b, len_k, n_head, d_k)
+        v = self.w_vs(v).view(sz_b, len_v, n_head, d_v)
+
+        q = q.permute(2, 0, 1, 3).contiguous().view(-1, len_q, d_k)  # (n*b) x lq x dk
+        k = k.permute(2, 0, 1, 3).contiguous().view(-1, len_k, d_k)  # (n*b) x lk x dk
+        v = v.permute(2, 0, 1, 3).contiguous().view(-1, len_v, d_v)  # (n*b) x lv x dv
+
+        # mask = mask.repeat(n_head, 1, 1)  # (n*b) x .. x ..
+        output, attn = self.attention(q, k, v, mask=mask)
+
+        output = output.view(n_head, sz_b, len_q, d_v)
+        output = output.permute(1, 2, 0, 3).contiguous().view(sz_b, len_q, -1)  # b x lq x (n*dv)
+
+        output = self.dropout(output)
+        # output = self.layer_norm(output + residual)
+
+        return output, attn
+
+
 class BatchLSTMCRFTagger(nn.Module):
 
     def __init__(self, config):
@@ -26,14 +101,21 @@ class BatchLSTMCRFTagger(nn.Module):
         self.dropout_rate = config.dropout
         self.device = config.device
         self.window_size = config.window_size
-        self.attention = config.attention
+        self.num_attention = config.num_attention
 
         self.linear_dim = (self.hidden_dim * 2 if self.bidirectional else self.hidden_dim) * self.window_size
+        self.hdim = self.hidden_dim * 2 if self.bidirectional else self.hidden_dim
 
         self.emb = nn.Embedding(self.vocab_size, self.emb_dim)
         self.dropout = nn.Dropout(self.dropout_rate)
         self.lstm = nn.LSTM(self.emb_dim, self.hidden_dim,
                             num_layers=self.num_layers, bidirectional=self.bidirectional, dropout=self.dropout_rate)
+        # for i in range(self.num_layers):
+        #     setattr(self, 'lstm' + str(i), nn.LSTM(self.emb_dim if i == 0 else self.hdim, self.hidden_dim,
+        #                                            bidirectional=self.bidirectional))
+        if self.num_attention > 0:
+            self.atten_layer = MultiHeadAttention(self.num_attention, self.hdim, 50, 50)
+            self.linear_dim = self.linear_dim + self.num_attention * 50 * self.window_size
         self.hidden2tag = nn.Linear(self.linear_dim, self.target_size)
 
         self.transitions = nn.Parameter(torch.zeros(self.target_size, self.target_size))
@@ -72,15 +154,18 @@ class BatchLSTMCRFTagger(nn.Module):
         """
         sentences: 2D tensor of shape (max_length, batch_size)
         """
-        embed = self.emb(sentences)
-        embed = self.dropout(embed)
-        lstm_out, _ = self.lstm(embed)
-
-        if self.attention:
-            lstm_out = torch.transpose(lstm_out, 0, 1)
-            atten_weights = F.softmax(torch.bmm(lstm_out, torch.transpose(lstm_out, 1, 2)) / sqrt(self.hidden_dim * 2), -1)
-            lstm_out = lstm_out + atten_weights.bmm(lstm_out)
-            lstm_out = torch.transpose(lstm_out, 0, 1)
+        # lstm_out = self.emb(torch.transpose(sentences, 0, 1))
+        # for i in range(self.num_layers):
+        #     lstm_out = self.dropout(lstm_out)
+        #     lstm_out, _ = getattr(self, 'lstm' + str(i))(lstm_out)
+        #     if self.num_attention > 0:
+        #         lstm_out, atten = getattr(self, 'atten' + str(i))(lstm_out, lstm_out, lstm_out)
+        inputs = self.dropout(self.emb(sentences))
+        lstm_out, _ = self.lstm(inputs)
+        if self.num_attention > 0:
+            out_T = torch.transpose(lstm_out, 0, 1)
+            output, atten = self.atten_layer(out_T, out_T, out_T)
+            lstm_out = torch.cat((lstm_out, torch.transpose(output, 0, 1)), -1)
 
         ws = self.window_size
         k = (self.window_size - 1) // 2
@@ -146,7 +231,7 @@ def main():
     parser.add_argument('--max_length', type=int, default=64, help='maximum sequence length (shorter padded, longer truncated)')
     parser.add_argument('-bi', '--bidirectional', type=bool, default=True, help='use bidirectional lstm')
     parser.add_argument('--window_size', type=int, default=3, help='window size')
-    parser.add_argument('--attention', type=bool, default=False, help='use self-attention')
+    parser.add_argument('--num_attention', type=int, default=2, help='number of self-attention heads (0 to disable)')
     parser.add_argument('--regularization', type=float, default=1e-6, help='l2-regularization strength')
 
     parser.add_argument('--num_epochs', type=int, default=500, help='number of epochs to run')
