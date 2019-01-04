@@ -8,10 +8,28 @@ import json
 import os
 import logging
 import pickle
+from collections import Counter
 from utils import *
 
 NUM_SENTS = 3
-VAL_TYPES = ['avg', '1', '2', '3']
+VAL_TYPES = ['full', 'avg', '1', '2', '3']
+
+
+def evaluate(y, pred, metrics):
+    """
+    y: ndarray of shape (batch_size, max_length)
+    pred: ndarray of shape (batch_size, max_length)
+    metrics: list
+
+    returns: list
+    """
+    res = np.zeros((5, len(metrics)), dtype=np.float64)
+    res[0] = [eval_bleu(y, pred, m) for m in metrics]
+    res[2] = [eval_bleu(y[:, :7], pred[:, :7], m) for m in metrics]
+    res[3] = [eval_bleu(y[:, 7:14], pred[:, 7:14], m) for m in metrics]
+    res[4] = [eval_bleu(y[:, 14:21], pred[:, 14:21], m) for m in metrics]
+    res[1] = res[2:].mean(0)
+    return res.reshape(-1).tolist()
 
 
 class PoemGenerater(nn.Module):
@@ -32,7 +50,7 @@ class PoemGenerater(nn.Module):
 
         self.device = torch.device(config.device)
 
-        self.decoder_input_dim = self.emb_dim + self.pos_dim + self.hidden_dim * 2
+        self.decoder_input_dim = self.emb_dim + self.hidden_dim * 2 + self.pos_dim
 
         self.char_emb = nn.Embedding(self.vocab_size, self.emb_dim)
         self.pos_emb = nn.Embedding(self.num_sents * self.num_chars, self.pos_dim)
@@ -62,7 +80,7 @@ class PoemGenerater(nn.Module):
         weights = torch.transpose(weights, 0, 1)  # shape (max_length, batch_size)
         weights = F.softmax(weights, 0)
         atten = torch.sum(enc_h * weights, 0)  # shape (batch_size, hidden_dim)
-        return atten
+        return atten, weights
 
     def _general_attention(self, enc_h, h):
         """
@@ -75,7 +93,7 @@ class PoemGenerater(nn.Module):
         weights = torch.transpose(weights, 0, 1)  # shape (max_length, batch_size)
         weights = F.softmax(weights, 0)
         atten = torch.sum(enc_h * weights, 0)  # shape (batch_size, hidden_dim)
-        return atten
+        return atten, weights
 
     def _concat_attention(self, enc_h, h):
         """
@@ -84,10 +102,10 @@ class PoemGenerater(nn.Module):
         """
         h = h.unsqueeze(0).expand(*enc_h.size())
         h = torch.cat((enc_h, h), -1)
-        weights = self.atten_layer2(F.relu(self.atten_layer1(h)))
+        weights = self.atten_layer2(F.tanh(self.atten_layer1(h)))
         weights = F.softmax(weights, 0)
         atten = torch.sum(enc_h * weights, 0)  # shape (batch_size, hidden_dim)
-        return atten
+        return atten, weights
 
     def _reshape_hidden(self, hidden):
         if self.rnn_cell == 'LSTM':
@@ -122,16 +140,16 @@ class PoemGenerater(nn.Module):
         pos = torch.tensor(pos).unsqueeze(0).expand(bs).to(self.device)
         pos_embs = self.pos_emb(pos)
         char_embs = self.dropout(self.char_emb(prev_char))
-        inputs = torch.cat((char_embs, pos_embs, context), 1).unsqueeze(0)  # 3D
+        inputs = torch.cat((char_embs, context, pos_embs), 1).unsqueeze(0)  # 3D
         context, hidden = self.char_decoder(inputs, hidden)
         context = context.squeeze(0)
 
         if self.attention == 'dot':
-            atten = self._dot_attention(enc_h, context)
+            atten, _ = self._dot_attention(enc_h, context)
         elif self.attention == 'general':
-            atten = self._general_attention(enc_h, context)
+            atten, _ = self._general_attention(enc_h, context)
         elif self.attention == 'concat':
-            atten = self._concat_attention(enc_h, context)
+            atten, _ = self._concat_attention(enc_h, context)
 
         inputs = torch.cat((context, atten), 1)
         output = self.hidden2char(inputs)
@@ -167,6 +185,39 @@ class PoemGenerater(nn.Module):
         outputs = self.softmax(outputs)
         return outputs
 
+    def attention_weights(self, sentences):
+        bs = sentences.size()[1]  # batch_size
+        enc_out, hidden, context = self._encode(sentences)
+
+        prev_sent = context
+        prev_char = sentences[-1]
+        dec_w = []
+        outputs = []
+        for ts in range(self.num_sents):
+            hidden, char_context = self._decode_sent(hidden, context, prev_sent)
+            char_hidden = hidden
+            for tc in range(self.num_chars):
+                pos = ts * self.num_chars + tc
+
+                char_hidden, prev_sent, output = self._decode_char(enc_out, char_hidden, char_context, prev_char, pos)
+                _, prev_char = output.max(-1)
+                prev_char = prev_char.detach()
+
+                if self.attention == 'dot':
+                    _, weights = self._dot_attention(enc_out, prev_sent)
+                if self.attention == 'general':
+                    _, weights = self._general_attention(enc_out, prev_sent)
+                if self.attention == 'concat':
+                    _, weights = self._concat_attention(enc_out, prev_sent)
+
+                outputs.append(output)
+                dec_w.append(weights)
+
+        outputs = torch.stack(outputs, 0)
+        outputs = self.softmax(outputs)
+        dec_w = torch.cat(dec_w, -1)
+        return outputs, dec_w
+
 
 def export_checkpoint(epoch, model, optimizer, loss, best_dev_bleu, vocab, savepath):
     checkpoint = {
@@ -178,22 +229,6 @@ def export_checkpoint(epoch, model, optimizer, loss, best_dev_bleu, vocab, savep
         'vocab': vocab,
     }
     torch.save(checkpoint, savepath)
-
-
-def evaluate(y, pred, metrics):
-    """
-    y: ndarray of shape (batch_size, max_length)
-    pred: ndarray of shape (batch_size, max_length)
-    metrics: list
-
-    returns: list
-    """
-    res = np.zeros((4, len(metrics)), dtype=np.float64)
-    res[1] = [eval_bleu(y[:, :7], pred[:, :7], m) for m in metrics]
-    res[2] = [eval_bleu(y[:, 7:14], pred[:, 7:14], m) for m in metrics]
-    res[3] = [eval_bleu(y[:, 14:21], pred[:, 14:21], m) for m in metrics]
-    res[0] = res[1:].mean(0)
-    return res.reshape(-1).tolist()
 
 
 def bool_flag(v):
@@ -220,12 +255,13 @@ def main():
     parser.add_argument('--pos_dim', type=int, default=8, help='dimension of the position embedding')
     parser.add_argument('--hidden_dim', type=int, default=100, help='number of hidden units')
     parser.add_argument('--num_layers', type=int, default=3, help='number of stacked LSTM layers')
-    parser.add_argument('--dropout', type=float, default=0.5, help='dropout rate')
+    parser.add_argument('--dropout', type=float, default=0.3, help='dropout rate')
     parser.add_argument('-bi', '--bidirectional', type=bool_flag, nargs='?', const=True, default=True, help='use bidirectional lstm')
-    parser.add_argument('--regularization', type=float, default=1e-5, help='l2 regularization strength')
+    parser.add_argument('--regularization', type=float, default=1e-4, help='l2 regularization strength')
     parser.add_argument('--attention', choices=['dot', 'general', 'concat'], default='general', help='attention machanism')
-    parser.add_argument('--label_smoothing', type=float, default=0.2, help='label smoothing (zero to disable)')
+    parser.add_argument('--label_smoothing', type=float, default=0, help='label smoothing (zero to disable)')
     parser.add_argument('--rnn_cell', choices=['GRU', 'LSTM'], default='GRU', help='type of rnn cell')
+    parser.add_argument('--balance', action='store_true', help='weight each char with inverse frequency')
 
     parser.add_argument('--num_epochs', type=int, default=10000, help='number of epochs to run')
     parser.add_argument('-bs', '--batch_size', type=int, default=1000, help='batch size')
@@ -283,10 +319,18 @@ def main():
         optimizer = optim.Adam(model.parameters(),
                                lr=args.learning_rate, weight_decay=args.regularization)
 
+    weight = np.ones(len(vocab), dtype=np.float32)
+    if args.balance:
+        freq = Counter(train_x.reshape(-1)) + Counter(train_y.reshape(-1))
+        for i, _ in enumerate(vocab):
+            weight[i] /= freq[i]**0.5 + 100
+    weight /= weight.mean()
+    weight = torch.tensor(weight).to(device)
+
     if args.label_smoothing > 0:
-        criterion = nn.KLDivLoss(reduction='batchmean')
+        criterion = nn.KLDivLoss(weight=weight, reduction='batchmean')
     else:
-        criterion = nn.NLLLoss()
+        criterion = nn.NLLLoss(weight=weight)
 
     #------------------------------------------------------#
     #  training                                            #
@@ -350,6 +394,8 @@ def main():
                 model.train()
                 # dev_bleu = [eval_bleu(dev_y, dev_pred, metric) for metric in args.val_metric]
                 # train_bleu = [eval_bleu(train_y[:1000], train_pred, metric) for metric in args.val_metric]
+                # print(' '.join([vocab[i] for i in dev_y[0]]))
+                # print(' '.join([vocab[i] for i in dev_pred[0]]))
                 dev_bleu = evaluate(dev_y, dev_pred, args.val_metric)
                 train_bleu = evaluate(train_y[:1000], train_pred, args.val_metric)
 
@@ -362,8 +408,8 @@ def main():
                 print(('\t[Val]   ' + ' {}: {:.4f} ' * num_val).format(*[t for l in zip(args.val_metric, dev_bleu[:num_val]) for t in l]))
 
                 export_checkpoint(epoch, model, optimizer, loss, best_dev_bleu, vocab, os.path.join(args.export, 'final_state.ckpt'))
-                if dev_bleu[0] >= best_dev_bleu:
-                    best_dev_bleu = dev_bleu[0]
+                if dev_bleu[3] >= best_dev_bleu:
+                    best_dev_bleu = dev_bleu[3]
                     export_checkpoint(epoch, model, optimizer, loss, best_dev_bleu, vocab, os.path.join(args.export, 'model.ckpt'))
                 else:
                     # adjust lerning rate if dev_f decreases
