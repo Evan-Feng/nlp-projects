@@ -11,13 +11,14 @@ from vocab import Vocab
 from utils import *
 
 
+BOS_TOK = '<BOS>'
 EOS_TOK = '<EOS>'
 UNK_TOK = '<UNK>'
 PAD_TOK = '<PAD>'
 ENT_TOK = '<ENT>'
 ENT_TOK_SPACED = ' <ENT> '
 NTE_TOK = '<NTE>'  # non-terminal token
-EXTRA_TOKENS = [EOS_TOK, UNK_TOK, PAD_TOK]  # no need to include ENT_TOK since it's already in the questions
+EXTRA_TOKENS = [BOS_TOK, EOS_TOK, UNK_TOK, PAD_TOK]  # no need to include ENT_TOK since it's already in the questions
 
 
 def unique(array):
