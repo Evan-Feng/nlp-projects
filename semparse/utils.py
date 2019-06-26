@@ -80,7 +80,7 @@ def write_data(data_list, filepath):
 
 def to_device(data, cuda):
     if isinstance(data, (list, tuple)):
-        return [self.to_device(t) for t in data]
+        return [to_device(t) for t in data]
     else:
         if data is not None:
             return data.cuda() if cuda else data.cpu()
