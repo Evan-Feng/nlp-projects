@@ -18,7 +18,7 @@ PAD_TOK = '<PAD>'
 ENT_TOK = '<ENT>'
 ENT_TOK_SPACED = ' <ENT> '
 NTE_TOK = '<NTE>'  # non-terminal token
-EXTRA_TOKENS = [BOS_TOK, EOS_TOK, UNK_TOK, PAD_TOK]  # no need to include ENT_TOK since it's already in the questions
+EXTRA_TOKENS = [BOS_TOK, EOS_TOK, UNK_TOK, PAD_TOK, ENT_TOK]  # no need to include ENT_TOK since it's already in the questions
 
 
 def unique(array):
@@ -66,8 +66,8 @@ def convert(data_list, vocabs=None, qvocab_cutoff=None, is_test=False):
         qvocab, lvocab, rvocab = vocabs
     else:
         qvocab = Vocab(quest).frequency_cutoff(qvocab_cutoff).add_words(EXTRA_TOKENS)
-        lvocab = Vocab(logic).add_words(EXTRA_TOKENS + [NTE_TOK])
-        rvocab = Vocab([' '.join(r) for r in rels])
+        lvocab = Vocab(logic).add_words(EXTRA_TOKENS)
+        rvocab = Vocab([' '.join(r) for r in rels]).add_words(EXTRA_TOKENS)
     quest = to_indexes(quest, qvocab)
     if not is_test:
         logic = to_indexes(logic, lvocab)
@@ -113,6 +113,17 @@ def main():
     train = load_data(args.train)
     dev = load_data(args.dev)
     test = load_data(args.test)
+
+    print('Saving text data...')
+    for ds_type in ['sgl', 'cvt', 'mix']:
+        for part in ['train', 'dev', 'test']:
+            data = locals()[part]
+            if ds_type == 'sgl':
+                data = [t for t in data if t['question_type'] == 'single-relation']
+            elif ds_type == 'cvt':
+                data = [t for t in data if t['question_type'] == 'cvt']
+            dest = os.path.join(args.output_dir, f'{ds_type}.{part}')
+            write_data(data, dest)
 
     print('Binarizing data...')
     sgl_train, cvt_train, mix_train = split_and_convert(train, qvocab_cutoff=args.vocab_cutoff)
