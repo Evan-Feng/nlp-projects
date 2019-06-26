@@ -43,13 +43,13 @@ class DataLoader(object):
                     r.append(self.ds['r'][idx])
 
             qx, len_q = pad_sequences(q, self.q_pad_id)
-            if is_test:
+            if self.is_test:
                 batch = [qx, None, None, len_q, None]
             else:
                 lx, len_l = pad_sequences(l, self.l_pad_id)
                 rx = torch.tensor(sum(r, []))  # r is flattened into a 1-D array
                 batch = [qx, lx, rx, len_q, len_l]
-            yield to_device(batch, cuda)
+            yield to_device(batch, self.cuda)
 
     def reshuffle(self):
         self.perm = np.random.permutation(self.size)
