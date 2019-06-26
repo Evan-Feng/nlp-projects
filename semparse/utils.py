@@ -2,6 +2,9 @@
 #   utils.py - utility functions for data loading and model training   #
 #   author: fengyanlin@pku.edu.cn                                      #
 ########################################################################
+
+import torch
+import numpy as np
 import json
 import os
 import argparse
@@ -42,8 +45,7 @@ def data2dict(data):
     }
     entities = dic['parameters'].split(' ||| ')
     entities = [e.split(' ') for e in entities]
-    entities = [[e[0], e[2]] for e in entities if e[1] == '(entity)']
-    entities = [[e[0], list(map(int, e[1][1:-1].split(',')))] for e in entities]
+    entities = [[e[0], e[1], list(map(int, e[2][1:-1].split(',')))] for e in entities]
     dic['parameters'] = entities
     return dic
 
@@ -63,3 +65,33 @@ def load_data(filepath):
             else:
                 data.append(line.strip())
     return data_list
+
+
+def write_data(data_list, filepath):
+    with open(filepath, 'w') as fout:
+        for i, t in enumerate(data_list):
+            parameters = ' ||| '.join(['{} {} [{},{}]'.format(e[0], e[1], e[2][0], e[2][1]) for e in t['parameters']])
+            fout.write('<question id={}>\t{}\n'.format(i, t['question']))
+            fout.write('<logical form id={}>\t{}\n'.format(i, t['logical_form']))
+            fout.write('<parameters id={}>\t{}\n'.format(i, parameters))
+            fout.write('<question type id={}>\t{}\n'.format(i, t['question_type']))
+            fout.write('==================================================\n')
+
+
+def to_device(data, cuda):
+    if isinstance(data, (list, tuple)):
+        return [self.to_device(t) for t in data]
+    else:
+        if data is not None:
+            return data.cuda() if cuda else data.cpu()
+        else:
+            return None
+
+
+def pad_sequences(seqs, pad_value):
+    lengths = torch.tensor([len(s) for s in seqs])
+    paded = np.full((len(seqs), lengths.max()), pad_value)
+    for i in range(len(seqs)):
+        paded[i, :lengths[i]] = seqs[i]
+    paded = torch.tensor(paded)
+    return paded, lengths
