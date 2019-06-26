@@ -1,4 +1,7 @@
 # Project specific
+*.run
+*.pred
+*.out
 *.train
 *.dev
 *.test
