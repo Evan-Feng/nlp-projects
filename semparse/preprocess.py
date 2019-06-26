@@ -67,7 +67,7 @@ def convert(data_list, vocabs=None, qvocab_cutoff=None, is_test=False):
     else:
         qvocab = Vocab(quest).frequency_cutoff(qvocab_cutoff).add_words(EXTRA_TOKENS)
         lvocab = Vocab(logic).add_words(EXTRA_TOKENS + [NTE_TOK])
-        rvocab = Vocab([' '.join(r) for r in rels]).add_words(EXTRA_TOKENS)
+        rvocab = Vocab([' '.join(r) for r in rels])
     quest = to_indexes(quest, qvocab)
     if not is_test:
         logic = to_indexes(logic, lvocab)
