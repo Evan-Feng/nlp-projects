@@ -1,5 +1,5 @@
 # Project specific
-*.run
+*.sh
 *.pred
 *.out
 *.train
