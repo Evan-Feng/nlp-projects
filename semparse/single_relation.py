@@ -87,10 +87,10 @@ def main():
     parser.add_argument('--dropoute', type=float, default=0.1, help='dropout to remove words from embedding layer')
     parser.add_argument('--dropoutw', type=float, default=0.5, help='weight dropout applied to the RNN hidden to hidden matrix')
     parser.add_argument('--dropoutd', type=float, default=0.1, help='dropout applied to language discriminator')
-    parser.add_argument('--wdecay', type=float, default=1.2e-6, help='weight decay applied to all weights')
+    parser.add_argument('--wdecay', type=float, default=1e-6, help='weight decay applied to all weights')
 
     # optimization
-    parser.add_argument('--max_steps', type=int, default=50000, help='upper step limit')
+    parser.add_argument('--max_steps', type=int, default=20000, help='upper step limit')
     parser.add_argument('-bs', '--batch_size', type=int, default=30, help='batch size')
     parser.add_argument('--optimizer', type=str,  default='adam', choices=['adam', 'sgd'], help='optimizer to use (sgd, adam)')
     parser.add_argument('--beta1', type=float, default=0.9, help='beta1 for adam optimizer')
