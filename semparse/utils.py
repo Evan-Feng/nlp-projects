@@ -1,0 +1,65 @@
+########################################################################
+#   utils.py - utility functions for data loading and model training   #
+#   author: fengyanlin@pku.edu.cn                                      #
+########################################################################
+import json
+import os
+import argparse
+
+
+def bool_flag(v):
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
+
+def check_path(path):
+    d = os.path.dirname(path)
+    if not os.path.exists(d):
+        os.makedirs(d)
+
+
+def export_config(config, path):
+    param_dict = dict(vars(config))
+    check_path(path)
+    with open(path, 'w') as fout:
+        json.dump(param_dict, fout, indent=4)
+
+
+def data2dict(data):
+    """
+    data: list[str]
+    returns: dict
+    """
+    dic = {
+        'question': data[0].split('\t')[1],
+        'logical_form': None if '\t' not in data[1] else data[1].split('\t')[1],
+        'parameters': data[2].split('\t')[1],
+        'question_type': data[3].split('\t')[1],
+    }
+    entities = dic['parameters'].split(' ||| ')
+    entities = [e.split(' ') for e in entities]
+    entities = [[e[0], e[2]] for e in entities if e[1] == '(entity)']
+    entities = [[e[0], list(map(int, e[1][1:-1].split(',')))] for e in entities]
+    dic['parameters'] = entities
+    return dic
+
+
+def load_data(filepath):
+    """
+    filepath: str
+    returns: list[dict]
+    """
+    data_list = []
+    data = []
+    with open(filepath, 'r') as fin:
+        for line in fin:
+            if line.strip().startswith('='):
+                data_list.append(data2dict(data))
+                data = []
+            else:
+                data.append(line.strip())
+    return data_list
