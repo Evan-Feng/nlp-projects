@@ -72,11 +72,11 @@ class CNNClassifier(nn.Module):
         self.fc_p = fc_p
 
         self.fc_in_dim = kernel_num * len(kernel_sizes)
-        self.cnn = CNNEncoder(vocab_size, emb_size, kernel_num, kernel_sizes, embed_p)
+        self.encoder = CNNEncoder(vocab_size, emb_size, kernel_num, kernel_sizes, embed_p)
         self.mlp = MLP(self.fc_in_dim, hidden_size, output_size, num_fc_layers, fc_p)
 
     def forward(self, inputs):
-        return self.mlp(self.cnn(inputs))
+        return self.mlp(self.encoder(inputs))
 
 
 class CNNMultiLabelClassifier(nn.Module):
@@ -95,12 +95,12 @@ class CNNMultiLabelClassifier(nn.Module):
         self.fc_p = fc_p
 
         self.fc_in_dim = kernel_num * len(kernel_sizes)
-        self.cnn = CNNEncoder(vocab_size, emb_size, kernel_num, kernel_sizes, embed_p)
+        self.encoder = CNNEncoder(vocab_size, emb_size, kernel_num, kernel_sizes, embed_p)
         self.mlps = []
         for size in output_sizes:
             self.mlps.append(MLP(self.fc_in_dim, hidden_size, size, num_fc_layers, fc_p))
         self.mlps = nn.ModuleList(self.mlps)
 
     def forward(self, inputs):
-        encoded = self.cnn(inputs)
+        encoded = self.encoder(inputs)
         return [mlp(encoded) for mlp in self.mlps]
