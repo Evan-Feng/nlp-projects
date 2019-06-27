@@ -213,7 +213,6 @@ def train(args):
         if args.optimizer == 'adam':
             opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wdecay, betas=(args.beta1, 0.999))
 
-
     crit = nn.CrossEntropyLoss()
     bs = args.batch_size
     if args.cuda:
