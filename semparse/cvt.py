@@ -100,11 +100,11 @@ def main():
     parser.add_argument('--sample_train', type=int, default=0, help='downsample training set to n examples (zero to disable)')
     parser.add_argument('--resume', help='path of model to resume')
     parser.add_argument('--mode', choices=['train', 'eval'], default='train', help='train or evaluate')
-    parser.add_argument('--model', choices=['decomp', 'chained'], default='chained', help='train or evaluate')
+    parser.add_argument('--model', choices=['decomp', 'chained'], default='chained', help='neural model')
 
     # architecture
     parser.add_argument('--emb_size', type=int, default=300, help='size of word embeddings')
-    parser.add_argument('--rel_emb_size', type=int, default=100, help='size of relation embeddings')
+    parser.add_argument('--rel_emb_size', type=int, default=50, help='size of relation embeddings')
     parser.add_argument('--hidden_size', type=int, default=600, help='number of hidden units per layer of the language model')
     parser.add_argument('--nkernels', type=int, default=100, help='number of cnn kernels')
     parser.add_argument('--kernel_sizes', type=int, nargs='+', default=[2, 3, 4], help='number of hidden units per layer of the language model')
@@ -118,7 +118,7 @@ def main():
     parser.add_argument('--dropoute', type=float, default=0.1, help='dropout to remove words from embedding layer')
     # parser.add_argument('--dropoutw', type=float, default=0.5, help='weight dropout applied to the RNN hidden to hidden matrix')
     # parser.add_argument('--dropoutd', type=float, default=0.1, help='dropout applied to language discriminator')
-    parser.add_argument('--wdecay', type=float, default=1e-6, help='weight decay applied to all weights')
+    parser.add_argument('--wdecay', type=float, default=1e-4, help='weight decay applied to all weights')
 
     # optimization
     parser.add_argument('--max_steps', type=int, default=200000, help='upper step limit')
@@ -295,14 +295,14 @@ def eval(args):
     ents = [[s[0] for s in t['parameters']] for t in data_list]
 
     # get predictions
-    quest_masked = []
-    for q, ent in zip(quest, ents):
-        for e in ent:
-            q = q.replace(' ' + e.replace('_', ' ') + ' ', ENT_TOK_SPACED)
-        quest_masked.append(q)
+    # quest_masked = []
+    # for q, ent in zip(quest, ents):
+    #     for e in ent:
+    #         q = q.replace(' ' + e.replace('_', ' ') + ' ', ENT_TOK_SPACED)
+    #     quest_masked.append(q)
     q_unk_id = qv.stoi[UNK_TOK]
     q_eos_id = qv.stoi[EOS_TOK]
-    qx = [[qv.stoi[w] if w in qv else q_unk_id for w in q.split(' ')] + [q_eos_id] for q in quest_masked]
+    qx = [[qv.stoi[w] if w in qv else q_unk_id for w in q.split(' ')] + [q_eos_id] for q in quest]
     model.eval()
     with torch.no_grad():
         pred_r, pred_e = predict(model, qx, qv.stoi[PAD_TOK], args.batch_size)
