@@ -33,13 +33,21 @@ def unique(array):
 
 def mask_out_entities(data_list, is_test=False):
     data_list = copy.deepcopy(data_list)
+    ent_indexes = [] if not is_test else None
     for t in data_list:
         ents = [e[0] for e in t['parameters']]
+
+        if not is_test:
+            ei = [(t['logical_form'].find(' ' + e + ' '), i) for i, e in enumerate(ents)]
+            ei = sorted(ei)
+            ei = [ej[1] for ej in ei]
+            ent_indexes.append(ei)
+
         for e in ents:
             t['question'] = t['question'].replace(' ' + e.replace('_', ' ') + ' ', ENT_TOK_SPACED)
             if not is_test:
                 t['logical_form'] = t['logical_form'].replace(' ' + e + ' ', ENT_TOK_SPACED)
-    return data_list
+    return data_list, ent_indexes
 
 
 def to_indexes(sents, vocab):
@@ -56,7 +64,7 @@ def to_indexes(sents, vocab):
 
 
 def convert(data_list, vocabs=None, qvocab_cutoff=None, is_test=False):
-    data_list = mask_out_entities(data_list, is_test)
+    data_list, ent_indexes = mask_out_entities(data_list, is_test)
     quest = [t['question'] for t in data_list]
     if not is_test:
         rels = [[x[0] for x in re.findall(r'\s((mso|r-mso).*?)\s', t['logical_form'])] for t in data_list]
@@ -76,6 +84,7 @@ def convert(data_list, vocabs=None, qvocab_cutoff=None, is_test=False):
         'q': quest,
         'l': None if is_test else logic,
         'r': None if is_test else rels,
+        'ei': ent_indexes,
         'e': ents,
         'qv': qvocab,
         'lv': lvocab,

@@ -34,13 +34,14 @@ class DataLoader(object):
 
     def __iter__(self):
         for i in range(0, self.size, self.batch_size):
-            q, l, r = [], [], []
+            q, l, r, ei = [], [], [], []
             j = min(self.size, i + self.batch_size)
             for idx in self.perm[i:j]:
                 q.append(self.ds['q'][idx] + [self.q_eos_id])
                 if not self.is_test:
                     l.append([self.l_bos_id] + self.ds['l'][idx] + [self.l_eos_id])
                     r.append(self.ds['r'][idx])
+                    ei.append(self.ds['ei'][idx])
 
             qx, len_q = pad_sequences(q, self.q_pad_id)
             if self.is_test:
@@ -48,7 +49,8 @@ class DataLoader(object):
             else:
                 lx, len_l = pad_sequences(l, self.l_pad_id)
                 rx = torch.tensor(sum(r, []))  # r is flattened into a 1-D array
-                batch = [qx, lx, rx, len_q, len_l]
+                ex = torch.tensor(sum(ei, []))  # ei is flattened into a 1-D array
+                batch = [qx, lx, rx, len_q, len_l, ex]
             yield to_device(batch, self.cuda)
 
     def reshuffle(self):

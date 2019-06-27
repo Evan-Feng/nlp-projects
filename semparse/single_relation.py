@@ -25,7 +25,7 @@ def print_line():
 def evaluate(model, batch):
     acc = 0
     size = 0
-    for qx, lx, rx, len_q, len_l in batch:
+    for qx, lx, rx, len_q, len_l, _ in batch:
         pred = model(qx)
         _, pred = pred.max(-1)
         acc += (pred == rx).sum().item()
@@ -91,13 +91,13 @@ def main():
     parser.add_argument('--nlayers', type=int, default=2, help='number of layers')
 
     # regularization
-    parser.add_argument('--dropoutc', type=float, default=0.6, help='dropout applied to classifier')
-    parser.add_argument('--dropouto', type=float, default=0.4, help='dropout applied to rnn outputs')
+    # parser.add_argument('--dropoutc', type=float, default=0.6, help='dropout applied to classifier')
+    # parser.add_argument('--dropouto', type=float, default=0.4, help='dropout applied to rnn outputs')
     parser.add_argument('--dropouth', type=float, default=0.3, help='dropout for rnn layers')
     # parser.add_argument('--dropouti', type=float, default=0.4, help='dropout for input embedding layers')
     parser.add_argument('--dropoute', type=float, default=0.1, help='dropout to remove words from embedding layer')
-    parser.add_argument('--dropoutw', type=float, default=0.5, help='weight dropout applied to the RNN hidden to hidden matrix')
-    parser.add_argument('--dropoutd', type=float, default=0.1, help='dropout applied to language discriminator')
+    # parser.add_argument('--dropoutw', type=float, default=0.5, help='weight dropout applied to the RNN hidden to hidden matrix')
+    # parser.add_argument('--dropoutd', type=float, default=0.1, help='dropout applied to language discriminator')
     parser.add_argument('--wdecay', type=float, default=1e-6, help='weight decay applied to all weights')
 
     # optimization
@@ -115,7 +115,7 @@ def main():
     parser.add_argument('--log_interval', type=int, default=100, metavar='N', help='report interval')
     parser.add_argument('--val_interval', type=int, default=400, metavar='N', help='validation interval')
     parser.add_argument('--debug', action='store_true', help='debug mode')
-    parser.add_argument('--export', type=str,  default='export/default/', help='dir to save the model')
+    parser.add_argument('--export', type=str,  default='export/sgl/', help='dir to save the model')
 
     args = parser.parse_args()
     if args.debug:
@@ -163,9 +163,8 @@ def train(args):
         model, opt = model_load(args.resume)
 
     else:
-        model = CNNClassifier(len(train_batch.ds['qv']), args.emb_size, 1, args.hidden_size,
-                              len(train_batch.ds['rv']), args.nkernels, args.kernel_sizes,
-                              args.dropoute, args.dropouth)
+        model = CNNClassifier(len(train_batch.ds['qv']), args.emb_size, args.nkernels, args.kernel_sizes,
+                              args.dropoute, 1, args.hidden_size, len(train_batch.ds['rv']), args.dropouth)
         if args.optimizer == 'sgd':
             opt = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
         if args.optimizer == 'adam':
@@ -203,7 +202,7 @@ def train(args):
         for batch in train_batch:
             opt.zero_grad()
 
-            qx, lx, rx, len_q, len_l = batch
+            qx, lx, rx, len_q, len_l, _ = batch
             loss = crit(model(qx), rx)
             loss.backward()
             opt.step()
