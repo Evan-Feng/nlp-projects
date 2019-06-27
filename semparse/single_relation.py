@@ -6,7 +6,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.utils.rnn import pad_sequence
 import numpy as np
 import argparse
 import os
@@ -34,13 +33,25 @@ def evaluate(model, batch):
     return acc / size
 
 
-def predict(model, batch):
-    res = []
-    for qx, _, _, len_q, _ in batch:
-        pred = model(qx)
-        _, pred = pred.max(-1)
-        res.append(pred)
-    return torch.cat(res, 0)
+def predict(model, qx, pad_id, batch_size=1000):
+    """
+    model: nn.Module
+    pad_id: int
+    qx: list[list[int]]
+
+    returns: torch.Tensor
+    """
+    is_cuda = next(model.parameters()).is_cuda
+    pred = []
+    for i in range(0, len(qx), batch_size):
+        j = min(len(qx), i + batch_size)
+        input_x, _ = pad_sequences(qx[i:j], pad_id)
+        input_x = to_device(input_x, is_cuda)
+        p = model(input_x)
+        _, p = p.max(-1)
+        pred.append(p)
+    pred = torch.cat(pred, 0)
+    return pred
 
 
 def model_save(model, opt, path):
@@ -90,7 +101,7 @@ def main():
     parser.add_argument('--wdecay', type=float, default=1e-6, help='weight decay applied to all weights')
 
     # optimization
-    parser.add_argument('--max_steps', type=int, default=50000, help='upper step limit')
+    parser.add_argument('--max_steps', type=int, default=200000, help='upper step limit')
     parser.add_argument('--max_steps_before_stop', type=int, default=5000, help='stop if dev_acc does not increase for N steps')
     parser.add_argument('-bs', '--batch_size', type=int, default=200, help='batch size')
     parser.add_argument('--optimizer', type=str,  default='adam', choices=['adam', 'sgd'], help='optimizer to use (sgd, adam)')
@@ -250,16 +261,9 @@ def eval(args):
     ents = [t['parameters'][0][0] for t in data_list]
     quest = [q.replace(' ' + e.replace('_', ' ') + ' ', ENT_TOK_SPACED) for q, e in zip(quest, ents)]
     qx = [[qv.stoi[w] if w in qv else qv.stoi[UNK_TOK] for w in q.split(' ')] for q in quest]
-    pred = []
     with torch.no_grad():
-        for i in range(0, len(qx), args.batch_size):
-            j = min(len(qx), i + args.batch_size)
-            input_x, _ = pad_sequences(qx[i:j], qv.stoi[PAD_TOK])
-            input_x = to_device(input_x, args.cuda)
-            p = model(input_x)
-            _, p = p.max(-1)
-            pred.append(p)
-    pred = torch.cat(pred, 0)
+        pred = predict(model, qx, qv.stoi[PAD_TOK])
+
     rels = [rv.itos[r] for r in pred]
     lambda_exps = ['( lambda ?x ( {} {} ?x ) )'.format(r, e) for r, e in zip(rels, ents)]
     for t, exp in zip(data_list, lambda_exps):
