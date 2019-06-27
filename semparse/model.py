@@ -104,3 +104,43 @@ class CNNMultiLabelClassifier(nn.Module):
     def forward(self, inputs):
         encoded = self.encoder(inputs)
         return [mlp(encoded) for mlp in self.mlps]
+
+
+class ChainedCNNMultiLabelClassifier(nn.Module):
+    init_range = 0.1
+
+    def __init__(self, vocab_size, emb_size, kernel_num, kernel_sizes, embed_p,
+                 num_fc_layers, hidden_size, output_sizes, fc_p, rel_emb_size):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.emb_size = emb_size
+        self.kernel_num = kernel_num
+        self.kernel_sizes = kernel_sizes
+        self.embed_p = embed_p
+        self.num_fc_layers = num_fc_layers
+        self.hidden_size = hidden_size
+        self.output_sizes = output_sizes
+        self.fc_p = fc_p
+
+        self.fc_in_dim = kernel_num * len(kernel_sizes)
+        self.encoder = CNNEncoder(vocab_size, emb_size, kernel_num, kernel_sizes, embed_p)
+        self.rel_emb = nn.Embedding(output_sizes[0], rel_emb_size)
+        self.mlps = []
+        curr_dim = self.fc_in_dim
+        for size in output_sizes:
+            self.mlps.append(MLP(curr_dim, hidden_size, size, num_fc_layers, fc_p))
+            curr_dim += rel_emb_size
+        self.mlps = nn.ModuleList(self.mlps)
+
+    def forward(self, inputs):
+        encoded = self.encoder(inputs)
+        history = []
+        outputs = []
+        for mlp in self.mlps:
+            intputs = torch.cat([encoded] + history, -1)
+            out = mlp(intputs)
+            outputs.append(out)
+            _, pred = out.max(-1)
+            pred = pred.detach()
+            history.append(self.rel_emb(pred))
+        return outputs
