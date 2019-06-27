@@ -12,7 +12,7 @@ import os
 import re
 import time
 import json
-from model import CNNMultiLabelClassifier
+from model import CNNMultiLabelClassifier, ChainedCNNMultiLabelClassifier
 from data import DataLoader
 from preprocess import UNK_TOK, PAD_TOK, EOS_TOK, ENT_TOK_SPACED
 from utils import *
@@ -100,9 +100,11 @@ def main():
     parser.add_argument('--sample_train', type=int, default=0, help='downsample training set to n examples (zero to disable)')
     parser.add_argument('--resume', help='path of model to resume')
     parser.add_argument('--mode', choices=['train', 'eval'], default='train', help='train or evaluate')
+    parser.add_argument('--model', choices=['decomp', 'chained'], default='chained', help='train or evaluate')
 
     # architecture
     parser.add_argument('--emb_size', type=int, default=300, help='size of word embeddings')
+    parser.add_argument('--rel_emb_size', type=int, default=100, help='size of relation embeddings')
     parser.add_argument('--hidden_size', type=int, default=600, help='number of hidden units per layer of the language model')
     parser.add_argument('--nkernels', type=int, default=100, help='number of cnn kernels')
     parser.add_argument('--kernel_sizes', type=int, nargs='+', default=[2, 3, 4], help='number of hidden units per layer of the language model')
@@ -182,8 +184,12 @@ def train(args):
         model, opt = model_load(args.resume)
 
     else:
-        model = CNNMultiLabelClassifier(len(train_batch.ds['qv']), args.emb_size, args.nkernels, args.kernel_sizes,
-                                        args.dropoute, 1, args.hidden_size, [len(train_batch.ds['rv'])] * 3 + [2], args.dropouth)
+        if args.model == 'decomp':
+            model = CNNMultiLabelClassifier(len(train_batch.ds['qv']), args.emb_size, args.nkernels, args.kernel_sizes,
+                                            args.dropoute, 1, args.hidden_size, [len(train_batch.ds['rv'])] * 3 + [2], args.dropouth)
+        elif args.model == 'chained':
+            model = ChainedCNNMultiLabelClassifier(len(train_batch.ds['qv']), args.emb_size, args.nkernels, args.kernel_sizes,
+                                                   args.dropoute, 1, args.hidden_size, [len(train_batch.ds['rv'])] * 3 + [2], args.dropouth, args.rel_emb_size)
         if args.emb_mode in ('init', 'freeze'):
             emb_x = torch.load(args.emb)
             model.encoder.emb.weight.data.copy_(torch.from_numpy(emb_x))
