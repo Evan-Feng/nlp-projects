@@ -17,9 +17,9 @@ import os
 import re
 import time
 import json
-from model import CNNClassifier
+from model import CNNClassifier, PCNNClassifier
 from data import DataLoader
-from preprocess import UNK_TOK, PAD_TOK, ENT_TOK_SPACED
+from preprocess import UNK_TOK, PAD_TOK, ENT_TOK, EOS_TOK, ENT_TOK_SPACED
 from utils import *
 
 
@@ -118,6 +118,7 @@ def main():
     parser.add_argument('--sample_train', type=int, default=0, help='downsample training set to n examples (zero to disable)')
     parser.add_argument('--resume', help='path of model to resume')
     parser.add_argument('--mode', choices=['train', 'eval'], default='train', help='train or evaluate')
+    parser.add_argument('--model', choices=['cnn'], default='cnn', help='encoder model')
 
     # architecture
     parser.add_argument('--emb_size', type=int, default=300, help='size of word embeddings')
@@ -201,8 +202,13 @@ def train(args):
         model, opt = model_load(args.resume)
 
     else:
-        model = CNNClassifier(len(train_batch.ds['qv']), args.emb_size, args.nkernels, args.kernel_sizes,
-                              args.dropoute, 1, args.hidden_size, len(train_batch.ds['rv']), args.dropouth)
+        if args.model == 'cnn':
+            model = CNNClassifier(len(train_batch.ds['qv']), args.emb_size, args.nkernels, args.kernel_sizes,
+                                  args.dropoute, 1, args.hidden_size, len(train_batch.ds['rv']), args.dropouth)
+        # elif args.model == 'pcnn':
+        #     tok_ids = [train_batch.ds['qv'].stoi[ENT_TOK], train_batch.ds['qv'].stoi[EOS_TOK]]
+        #     model = PCNNClassifier(len(train_batch.ds['qv']), args.emb_size, args.nkernels, args.kernel_sizes,
+        #                           args.dropoute, 1, args.hidden_size, len(train_batch.ds['rv']), args.dropouth, tok_ids)
         if args.emb_mode in ('init', 'freeze'):
             emb_x = torch.load(args.emb)
             model.encoder.emb.weight.data.copy_(torch.from_numpy(emb_x))
@@ -246,8 +252,10 @@ def train(args):
             opt.zero_grad()
 
             qx, lx, rx, len_q, len_l, _ = batch
-            loss = crit(model(qx), rx)
-            loss.backward()
+            # print(' '.join(train_batch.ds['qv'].itos[w] for w in qx[0]))
+            with torch.autograd.set_detect_anomaly(True):
+                loss = crit(model(qx), rx)
+                loss.backward()
             opt.step()
             total_loss += loss.item()
 
@@ -302,7 +310,11 @@ def eval(args):
     data_list = [t for t in data_list if t['question_type'] == 'single-relation']
     quest = [t['question'] for t in data_list]
     ents = [t['parameters'][0][0] for t in data_list]
-    quest = [q.replace(' ' + e.replace('_', ' ') + ' ', ENT_TOK_SPACED) for q, e in zip(quest, ents)]
+
+    # do_mask = lambda s, e: ('_' + s.replace(' ', '_') + '_').replace('_' + e + '_', '_' + ENT_TOK + '_', 1).replace('_', ' ').strip()
+
+    # quest = [q.replace(' ' + e.replace('_', ' ') + ' ', ENT_TOK_SPACED) for q, e in zip(quest, ents)]
+    # quest = [do_mask(q, e) for q, e in zip(quest, ents)]
     qx = [[qv.stoi[w] if w in qv else qv.stoi[UNK_TOK] for w in q.split(' ')] for q in quest]
     with torch.no_grad():
         pred = predict(model, qx, qv.stoi[PAD_TOK], args.batch_size)
