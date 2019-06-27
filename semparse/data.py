@@ -30,7 +30,7 @@ class DataLoader(object):
         self.l_pad_id = self.ds['lv'].stoi[PAD_TOK]
 
     def __len__(self):
-        return len(self.size)
+        return self.size
 
     def __iter__(self):
         for i in range(0, self.size, self.batch_size):
