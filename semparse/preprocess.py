@@ -20,6 +20,8 @@ ENT_TOK_SPACED = ' <ENT> '
 NTE_TOK = '<NTE>'  # non-terminal token
 EXTRA_TOKENS = [BOS_TOK, EOS_TOK, UNK_TOK, PAD_TOK, ENT_TOK]  # no need to include ENT_TOK since it's already in the questions
 
+MASK_QUESTION = False
+
 
 def unique(array):
     res = []
@@ -32,6 +34,9 @@ def unique(array):
 
 
 def mask_out_entities(data_list, is_test=False):
+    def mask_question(s, e):
+        return ('_' + s.replace(' ', '_') + '_').replace('_' + e + '_', '_' + ENT_TOK + '_', 1).replace('_', ' ').strip()
+
     data_list = copy.deepcopy(data_list)
     ent_indexes = [] if not is_test else None
     for t in data_list:
@@ -44,9 +49,11 @@ def mask_out_entities(data_list, is_test=False):
             ent_indexes.append(ei)
 
         for e in ents:
-            t['question'] = t['question'].replace(' ' + e.replace('_', ' ') + ' ', ENT_TOK_SPACED)
+            if MASK_QUESTION:
+                t['question'] = mask_question(t['question'], e)
             if not is_test:
-                t['logical_form'] = t['logical_form'].replace(' ' + e + ' ', ENT_TOK_SPACED)
+                t['logical_form'] = (' ' + t['logical_form'] + ' ').replace(' ' + e + ' ', ENT_TOK_SPACED).strip()
+
     return data_list, ent_indexes
 
 
