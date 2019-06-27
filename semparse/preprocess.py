@@ -112,6 +112,7 @@ def main():
     parser.add_argument('--train', default='data/EMNLP.train', help='training data')
     parser.add_argument('--dev', default='data/EMNLP.dev', help='development data')
     parser.add_argument('--test', default='data/EMNLP.test', help='test data')
+    parser.add_argument('--emb', default='data/wiki.en.vec', help='pretrained word embeddings')
     parser.add_argument('--output_dir', default='data/', help='output directory')
     parser.add_argument('--vocab_cutoff', type=int, default=5, help='frequency based vocab cutoff')
     parser.add_argument('--verbose', type=bool_flag, default=True, help='test data')
@@ -146,6 +147,15 @@ def main():
             dest = os.path.join(args.output_dir, f'{ds_type}_{part}.pth')
             torch.save(locals()[f'{ds_type}_{part}'], dest)
 
+    print('Loading word vectors...')
+    oov_rates = []
+    for ds_type in ['sgl', 'cvt', 'mix']:
+        v = locals()[f'{ds_type}_train']['qv']
+        x, cnt = load_vectors_with_vocab(args.emb, v)
+        dest = os.path.join(args.output_dir, f'{ds_type}_emb.pth')
+        torch.save(x, dest)
+        oov_rates.append(1 - cnt / len(v))
+
     if args.verbose:
         print()
         print('Statistics:')
@@ -158,6 +168,11 @@ def main():
         print('\tmix_train size = {}'.format(len(mix_train['q'])))
         print('\tmix_dev size   = {}'.format(len(mix_dev['q'])))
         print('\tmix_test size  = {}'.format(len(mix_test['q'])))
+        print()
+        print('\tsgl_oov_rate   = {:2f}'.format(oov_rates[0]))
+        print('\tcvt_oov_rate   = {:2f}'.format(oov_rates[1]))
+        print('\tmix_oov_rate   = {:2f}'.format(oov_rates[2]))
+        print()
 
 
 if __name__ == '__main__':
