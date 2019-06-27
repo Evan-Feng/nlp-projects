@@ -90,8 +90,9 @@ def main():
     parser.add_argument('--wdecay', type=float, default=1e-6, help='weight decay applied to all weights')
 
     # optimization
-    parser.add_argument('--max_steps', type=int, default=20000, help='upper step limit')
-    parser.add_argument('-bs', '--batch_size', type=int, default=30, help='batch size')
+    parser.add_argument('--max_steps', type=int, default=50000, help='upper step limit')
+    parser.add_argument('--max_steps_before_stop', type=int, default=5000, help='stop if dev_acc does not increase for N steps')
+    parser.add_argument('-bs', '--batch_size', type=int, default=200, help='batch size')
     parser.add_argument('--optimizer', type=str,  default='adam', choices=['adam', 'sgd'], help='optimizer to use (sgd, adam)')
     parser.add_argument('--beta1', type=float, default=0.9, help='beta1 for adam optimizer')
     parser.add_argument('-lr', '--lr', type=float, default=0.001, help='learning rate')
@@ -100,8 +101,8 @@ def main():
     # device / logging settings
     parser.add_argument('--seed', type=int, default=0, help='random seed')
     parser.add_argument('--cuda', type=bool_flag, nargs='?', const=True, default=True, help='use CUDA')
-    parser.add_argument('--log_interval', type=int, default=200, metavar='N', help='report interval')
-    parser.add_argument('--val_interval', type=int, default=1000, metavar='N', help='validation interval')
+    parser.add_argument('--log_interval', type=int, default=100, metavar='N', help='report interval')
+    parser.add_argument('--val_interval', type=int, default=400, metavar='N', help='validation interval')
     parser.add_argument('--debug', action='store_true', help='debug mode')
     parser.add_argument('--export', type=str,  default='export/default/', help='dir to save the model')
 
@@ -178,13 +179,15 @@ def train(args):
     # Training code
     ###############################################################################
 
-    best_acc = 0
     print('Traning:')
     print_line()
+    best_acc = 0
     total_loss = 0
+    last_best_step = 0
     step = 0
     start_time = time.time()
     model.train()
+    do_stop = False
     while True:
         for batch in train_batch:
             opt.zero_grad()
@@ -211,6 +214,7 @@ def train(args):
                     print_line()
                     print('| train_acc {:4f} | dev_acc {:4f} |'.format(train_acc, dev_acc))
                     if dev_acc > best_acc:
+                        last_best_step = step
                         best_acc = dev_acc
                         print(f'saving model to {model_path}')
                         model_save(model, opt, model_path)
@@ -219,8 +223,12 @@ def train(args):
                 start_time = time.time()
 
             step += 1
-            if step >= args.max_steps:
+            if step >= args.max_steps or step - last_best_step >= args.max_steps_before_stop:
+                do_stop = True
                 break
+
+        if do_stop:
+            break
         train_batch.reshuffle()
 
     print_line()
