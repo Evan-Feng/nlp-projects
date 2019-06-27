@@ -33,7 +33,7 @@ def evaluate(model, batch):
     return acc / size
 
 
-def predict(model, qx, pad_id, batch_size=1000):
+def predict(model, qx, pad_id, batch_size):
     """
     model: nn.Module
     pad_id: int
@@ -103,7 +103,7 @@ def main():
     # optimization
     parser.add_argument('--max_steps', type=int, default=200000, help='upper step limit')
     parser.add_argument('--max_steps_before_stop', type=int, default=5000, help='stop if dev_acc does not increase for N steps')
-    parser.add_argument('-bs', '--batch_size', type=int, default=200, help='batch size')
+    parser.add_argument('-bs', '--batch_size', type=int, default=30, help='batch size')
     parser.add_argument('--optimizer', type=str,  default='adam', choices=['adam', 'sgd'], help='optimizer to use (sgd, adam)')
     parser.add_argument('--beta1', type=float, default=0.9, help='beta1 for adam optimizer')
     parser.add_argument('-lr', '--lr', type=float, default=0.001, help='learning rate')
@@ -112,8 +112,8 @@ def main():
     # device / logging settings
     parser.add_argument('--seed', type=int, default=0, help='random seed')
     parser.add_argument('--cuda', type=bool_flag, nargs='?', const=True, default=True, help='use CUDA')
-    parser.add_argument('--log_interval', type=int, default=100, metavar='N', help='report interval')
-    parser.add_argument('--val_interval', type=int, default=400, metavar='N', help='validation interval')
+    parser.add_argument('--log_interval', type=int, default=50, metavar='N', help='report interval')
+    parser.add_argument('--val_interval', type=int, default=200, metavar='N', help='validation interval')
     parser.add_argument('--debug', action='store_true', help='debug mode')
     parser.add_argument('--export', type=str,  default='export/sgl/', help='dir to save the model')
 
@@ -261,7 +261,7 @@ def eval(args):
     quest = [q.replace(' ' + e.replace('_', ' ') + ' ', ENT_TOK_SPACED) for q, e in zip(quest, ents)]
     qx = [[qv.stoi[w] if w in qv else qv.stoi[UNK_TOK] for w in q.split(' ')] for q in quest]
     with torch.no_grad():
-        pred = predict(model, qx, qv.stoi[PAD_TOK])
+        pred = predict(model, qx, qv.stoi[PAD_TOK], args.batch_size)
 
     rels = [rv.itos[r] for r in pred]
     lambda_exps = ['( lambda ?x ( {} {} ?x ) )'.format(r, e) for r, e in zip(rels, ents)]
