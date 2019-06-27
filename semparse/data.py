@@ -11,7 +11,7 @@ from utils import *
 
 class DataLoader(object):
 
-    def __init__(self, filepath, batch_size, cuda, is_test=False):
+    def __init__(self, filepath, batch_size, cuda, is_test=False, shuffle=True):
         self.filepath = filepath
         self.batch_size = batch_size
         self.cuda = cuda
@@ -19,7 +19,7 @@ class DataLoader(object):
 
         self.ds = torch.load(filepath)
         self.size = len(self.ds['q'])
-        if self.is_test:
+        if self.is_test or not shuffle:
             self.perm = np.arange(self.size)
         else:
             self.perm = np.random.permutation(self.size)
@@ -45,7 +45,7 @@ class DataLoader(object):
 
             qx, len_q = pad_sequences(q, self.q_pad_id)
             if self.is_test:
-                batch = [qx, None, None, len_q, None]
+                batch = [qx, None, None, len_q, None, None]
             else:
                 lx, len_l = pad_sequences(l, self.l_pad_id)
                 rx = torch.tensor(sum(r, []))  # r is flattened into a 1-D array
