@@ -71,10 +71,10 @@ def write_data(data_list, filepath):
     with open(filepath, 'w') as fout:
         for i, t in enumerate(data_list):
             parameters = ' ||| '.join(['{} {} [{},{}]'.format(e[0], e[1], e[2][0], e[2][1]) for e in t['parameters']])
-            fout.write('<question id={}>\t{}\n'.format(i, t['question']))
-            fout.write('<logical form id={}>\t{}\n'.format(i, t['logical_form']))
-            fout.write('<parameters id={}>\t{}\n'.format(i, parameters))
-            fout.write('<question type id={}>\t{}\n'.format(i, t['question_type']))
+            fout.write('<question id={}>\t{}\n'.format(i + 1, t['question']))
+            fout.write('<logical form id={}>\t{}\n'.format(i + 1, t['logical_form']))
+            fout.write('<parameters id={}>\t{}\n'.format(i + 1, parameters))
+            fout.write('<question type id={}>\t{}\n'.format(i + 1, t['question_type']))
             fout.write('==================================================\n')
 
 
