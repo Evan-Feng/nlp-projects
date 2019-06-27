@@ -3,10 +3,15 @@
 #   author: fengyanlin@pku.edu.cn                                      #
 ########################################################################
 
+import matplotlib as mpl
+mpl.use('Agg')
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+from sklearn.metrics import confusion_matrix
+import matplotlib.pyplot as plt
 import argparse
 import os
 import re
@@ -54,6 +59,35 @@ def predict(model, qx, pad_id, batch_size):
     return pred
 
 
+def predict_with_batch(model, batch):
+    """
+    model: nn.Module
+    batch: DataLoader
+
+    returns: torch.Tensor
+    """
+
+    pred = []
+    for qx, lx, rx, len_q, len_l, _ in batch:
+        p = model(qx)
+        _, p = p.max(-1)
+        pred.append(p)
+    pred = torch.cat(pred, 0)
+    return pred
+
+
+def plot_confusion_matrix(model, batch, filepath, normalize=True):
+    pred = predict_with_batch(model, batch).cpu().numpy()
+    y = torch.cat([b[2] for b in batch], 0).cpu().numpy()
+    cm = confusion_matrix(y, pred)
+    if normalize:
+        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+    fig, ax = plt.subplots()
+    im = ax.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
+    ax.figure.colorbar(im, ax=ax)
+    fig.savefig(filepath, format='pdf')
+
+
 def model_save(model, opt, path):
     torch.save([model, opt], path)
 
@@ -78,13 +112,15 @@ def main():
     parser.add_argument('--train', default='data/sgl_train.pth', help='training data')
     parser.add_argument('--dev', default='data/sgl_dev.pth', help='development data')
     parser.add_argument('--test', default='data/EMNLP.test', help='test data')
+    parser.add_argument('--emb', default='data/sgl_emb.pth', help='pretrained word embeddings')
+    parser.add_argument('--emb_mode', choices=['init', 'freeze', 'random'], default='init', help='use pretarined word embeddings')
     parser.add_argument('--output', default='data/sgl.pred', help='output file path')
     parser.add_argument('--sample_train', type=int, default=0, help='downsample training set to n examples (zero to disable)')
     parser.add_argument('--resume', help='path of model to resume')
     parser.add_argument('--mode', choices=['train', 'eval'], default='train', help='train or evaluate')
 
     # architecture
-    parser.add_argument('--emb_size', type=int, default=200, help='size of word embeddings')
+    parser.add_argument('--emb_size', type=int, default=300, help='size of word embeddings')
     parser.add_argument('--hidden_size', type=int, default=600, help='number of hidden units per layer of the language model')
     parser.add_argument('--nkernels', type=int, default=100, help='number of cnn kernels')
     parser.add_argument('--kernel_sizes', type=int, nargs='+', default=[2, 3, 4], help='number of hidden units per layer of the language model')
@@ -114,6 +150,7 @@ def main():
     parser.add_argument('--cuda', type=bool_flag, nargs='?', const=True, default=True, help='use CUDA')
     parser.add_argument('--log_interval', type=int, default=50, metavar='N', help='report interval')
     parser.add_argument('--val_interval', type=int, default=200, metavar='N', help='validation interval')
+    parser.add_argument('--plot', type=bool_flag, nargs='?', const=True, default=False, help='plot confusion matrix')
     parser.add_argument('--debug', action='store_true', help='debug mode')
     parser.add_argument('--export', type=str,  default='export/sgl/', help='dir to save the model')
 
@@ -145,6 +182,7 @@ def train(args):
 
     model_path = os.path.join(args.export, 'model.pt')
     config_path = os.path.join(args.export, 'config.json')
+    cm_path = os.path.join(args.export, 'confusion_matrix.pdf')
     export_config(args, config_path)
     check_path(model_path)
 
@@ -165,10 +203,16 @@ def train(args):
     else:
         model = CNNClassifier(len(train_batch.ds['qv']), args.emb_size, args.nkernels, args.kernel_sizes,
                               args.dropoute, 1, args.hidden_size, len(train_batch.ds['rv']), args.dropouth)
+        if args.emb_mode in ('init', 'freeze'):
+            emb_x = torch.load(args.emb)
+            model.encoder.emb.weight.data.copy_(torch.from_numpy(emb_x))
+            if args.emb_mode == 'freeze':
+                freeze_net(model.encoder.emb)
         if args.optimizer == 'sgd':
             opt = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
         if args.optimizer == 'adam':
             opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wdecay, betas=(args.beta1, 0.999))
+
 
     crit = nn.CrossEntropyLoss()
     bs = args.batch_size
@@ -228,6 +272,7 @@ def train(args):
                         best_acc = dev_acc
                         print(f'saving model to {model_path}')
                         model_save(model, opt, model_path)
+                        plot_confusion_matrix(model, dev_batch, cm_path)
                     print_line()
                 model.train()
                 start_time = time.time()
