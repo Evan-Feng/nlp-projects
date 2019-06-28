@@ -113,7 +113,7 @@ def main():
     # regularization
     # parser.add_argument('--dropoutc', type=float, default=0.6, help='dropout applied to classifier')
     # parser.add_argument('--dropouto', type=float, default=0.4, help='dropout applied to rnn outputs')
-    parser.add_argument('--dropouth', type=float, default=0.3, help='dropout for rnn layers')
+    parser.add_argument('--dropouth', type=float, default=0.6, help='dropout for rnn layers')
     # parser.add_argument('--dropouti', type=float, default=0.4, help='dropout for input embedding layers')
     parser.add_argument('--dropoute', type=float, default=0.1, help='dropout to remove words from embedding layer')
     # parser.add_argument('--dropoutw', type=float, default=0.5, help='weight dropout applied to the RNN hidden to hidden matrix')
