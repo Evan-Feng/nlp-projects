@@ -2,6 +2,10 @@
 
 This repository contains semantic parsing model for single-relation questions and questions with CVT structures.
 
+## Dependencies
+- [Python](https://www.python.org/) >= 3.6
+- [PyTorch](https://pytorch.org/get-started/locally/) = 1.1
+
 ## Usage
 
 ### Data Preprocessing
